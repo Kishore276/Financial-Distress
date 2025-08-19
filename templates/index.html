@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Smart Finance Guardian</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="/static/style.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+  <body>
+    <nav class="nav">
+      <div class="brand">Smart Finance Guardian</div>
+      <div class="nav-links"><a href="/">Dashboard</a> <a href="#upload">Upload</a> <a href="/result">Results</a></div>
+    </nav>
+    <main class="container">
+      <section class="card">
+        <h2>Today</h2>
+        <p>Total spent today: ₹{{ total_today }}</p>
+        <p>Total this month: ₹{{ total_month }}</p>
+        <p>Financial health score: {{ health_score }}</p>
+      </section>
+
+      <section class="card" id="upload">
+        <h2>Upload Receipt</h2>
+        <form id="uploadForm" enctype="multipart/form-data">
+          <input type="file" name="receipt" id="receiptInput" accept="image/*" required>
+          <br>
+          <button type="submit">Upload</button>
+        </form>
+        <div id="uploadResult"></div>
+        <hr>
+        <h3>Or enter manually</h3>
+        <form action="/manual-entry" method="post">
+          <input name="amount" placeholder="Amount" required>
+          <input name="category" placeholder="Category">
+          <input type="date" name="date">
+          <button type="submit">Add Entry</button>
+        </form>
+      </section>
+
+    </main>
+    <footer class="footer">Made with ❤️</footer>
+    <script src="/static/script.js"></script>
+  </body>
+</html>

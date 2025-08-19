@@ -1,0 +1,7 @@
+flask
+werkzeug
+numpy
+scikit-learn
+pillow
+pytesseract
+chart.js

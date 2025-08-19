@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Results - Smart Finance Guardian</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="/static/style.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+  <body>
+    <nav class="nav">
+      <div class="brand">Smart Finance Guardian</div>
+      <div class="nav-links"><a href="/">Dashboard</a> <a href="#upload">Upload</a> <a href="/result">Results</a></div>
+    </nav>
+    <main class="container">
+      <section class="card">
+        <h2>Latest Entry</h2>
+        <p>Amount: ₹{{ latest.get('amount', latest.get('extracted_amount','-')) }}</p>
+        <p>Predicted Annual Expense: ₹{{ latest.get('predicted_annual_expense','-') }}</p>
+        <p>Predicted Annual Savings: ₹{{ latest.get('predicted_annual_savings','-') }}</p>
+        <p>Distress Probability: {{ latest.get('distress_probability','-') }}</p>
+        <p>Advice: {{ latest.get('advice','-') }}</p>
+      </section>
+
+      <section class="card">
+        <h2>Spending Breakdown</h2>
+        <ul>
+        {% for k,v in breakdown.items() %}
+          <li>{{ k }} : ₹{{ v }}</li>
+        {% endfor %}
+        </ul>
+      </section>
+    </main>
+    <footer class="footer">Made with ❤️</footer>
+  </body>
+</html>
