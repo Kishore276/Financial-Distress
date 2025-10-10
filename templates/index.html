@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Smart Finance Guardian - Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="/static/style.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+  <body>
+    <nav class="nav">
+      <div class="brand">💰 Smart Finance Guardian</div>
+      <div class="nav-links">
+        <a href="/">Dashboard</a>
+        <a href="#upload">Upload</a>
+        <a href="/result">Results</a>
+      </div>
+    </nav>
+
+    <main class="container">
+      <!-- Stats Grid -->
+      <div class="stats-grid">
+        <div class="stat-card {% if total_today > 1000 %}danger{% elif total_today > 500 %}warning{% else %}success{% endif %}">
+          <div class="stat-label">Today's Spending</div>
+          <div class="stat-value">₹{{ "%.2f"|format(total_today or 0) }}</div>
+          <div class="stat-description">Track your daily expenses</div>
+        </div>
+
+        <div class="stat-card {% if total_month > 10000 %}danger{% elif total_month > 5000 %}warning{% else %}success{% endif %}">
+          <div class="stat-label">This Month</div>
+          <div class="stat-value">₹{{ "%.2f"|format(total_month or 0) }}</div>
+          <div class="stat-description">Monthly spending total</div>
+        </div>
+
+        <div class="stat-card {% if health_score >= 80 %}success{% elif health_score >= 60 %}warning{% else %}danger{% endif %}">
+          <div class="stat-label">Financial Health</div>
+          <div class="stat-value">{{ health_score or 0 }}</div>
+          <div class="stat-description">
+            <div class="progress-container">
+              <div class="progress-bar" style="width: {{ health_score or 0 }}%"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Today's Transactions -->
+      {% if todays %}
+      <section class="card fade-in">
+        <h2>📊 Today's Transactions</h2>
+        <ul>
+          {% for item in todays %}
+          <li>
+            <span>
+              <strong>{{ item.get('category', 'Misc') }}</strong>
+              {% if item.get('filename') %}
+              <br><small style="color: var(--text-secondary);">📎 {{ item.get('filename') }}</small>
+              {% endif %}
+            </span>
+            <span class="info-value">₹{{ "%.2f"|format(item.get('amount') or item.get('extracted_amount') or 0) }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+      </section>
+      {% endif %}
+
+      <!-- Upload Receipt Section -->
+      <section class="card fade-in" id="upload">
+        <h2>📸 Upload Receipt</h2>
+        <form id="uploadForm" enctype="multipart/form-data">
+          <input type="file" name="receipt" id="receiptInput" accept="image/*,.pdf" required>
+          <button type="submit">
+            <span id="uploadBtnText">Upload & Analyze</span>
+          </button>
+        </form>
+        <div id="uploadResult"></div>
+
+        <hr>
+
+        <h3>✍️ Manual Entry</h3>
+        <form action="/manual-entry" method="post">
+          <input type="number" step="0.01" name="amount" placeholder="Amount (₹)" required>
+          <input type="text" name="category" placeholder="Category (e.g., Food, Transport)" value="Misc">
+          <input type="date" name="date" value="{{ today }}">
+          <button type="submit">Add Entry</button>
+        </form>
+      </section>
+
+    </main>
+
+    <footer class="footer">
+      <p>Made with ❤️ | Smart Finance Guardian © 2025</p>
+    </footer>
+
+    <script src="/static/script.js"></script>
+  </body>
+</html>
