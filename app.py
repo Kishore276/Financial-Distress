@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, redirect, url_for, jsonify
+from flask_cors import CORS
 import os, json, datetime, traceback
 from werkzeug.utils import secure_filename
 import re
@@ -12,7 +13,9 @@ CLF_MODEL = 'models/classification_model.pkl'
 ALLOWED_EXT = {'png','jpg','jpeg','gif','pdf'}
 
 app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
 # Initialize EasyOCR reader (lazy loading)
 ocr_reader = None
@@ -31,6 +34,10 @@ def get_ocr_reader():
             ocr_reader = False
     return ocr_reader if ocr_reader is not False else None
 
+def allowed_file(filename):
+    """Check if file extension is allowed"""
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXT
+
 # Utility: load / save json data
 def load_data():
     if not os.path.exists(DATA_FILE):
@@ -43,43 +50,91 @@ def save_data(data):
     with open(DATA_FILE,'w') as f:
         json.dump(data, f, indent=2)
 
-# Simple amount extraction from text (improved heuristic)
+# Enhanced amount extraction from text
 def extract_amounts_from_text(text):
     """Extract monetary amounts from text with improved patterns"""
     if not text:
         return []
     
+    # Convert to uppercase for easier matching
+    text_upper = text.upper()
     amounts = []
+    amount_contexts = []  # Store (amount, context_score) tuples
     
-    # Pattern 1: Standard currency formats (₹1,234.56 or Rs. 1234 or 1234.50)
-    patterns = [
-        r'(?:₹|Rs\.?|INR|rs\.?)\s*(\d{1,3}(?:[,\s]\d{3})*(?:\.\d{1,2})?)',  # ₹1,234.56
-        r'(\d{1,3}(?:[,\s]\d{3})+(?:\.\d{1,2})?)',  # 1,234.56
-        r'(\d+\.\d{2})',  # 123.45
-        r'(?:total|amount|sum|pay|paid)[\s:]*(?:₹|Rs\.?|INR)?\s*(\d+(?:[,\s]\d{3})*(?:\.\d{1,2})?)',  # total: 1234
+    # High priority patterns - look for keywords like TOTAL, AMOUNT, etc.
+    priority_patterns = [
+        (r'(?:TOTAL|GRAND\s*TOTAL|NET\s*TOTAL|AMOUNT\s*PAYABLE|BILL\s*AMOUNT)[\s:]*(?:RS\.?|₹|INR)?\s*(\d+(?:[,\s]\d{3})*(?:\.\d{1,2})?)', 100),
+        (r'(?:TO\s*PAY|PAYABLE|BALANCE|DUE)[\s:]*(?:RS\.?|₹|INR)?\s*(\d+(?:[,\s]\d{3})*(?:\.\d{1,2})?)', 90),
+        (r'(?:PAID|PAYMENT|RECEIVED)[\s:]*(?:RS\.?|₹|INR)?\s*(\d+(?:[,\s]\d{3})*(?:\.\d{1,2})?)', 80),
     ]
     
-    for pattern in patterns:
-        matches = re.findall(pattern, text, re.IGNORECASE)
+    # Check high priority patterns first
+    for pattern, score in priority_patterns:
+        matches = re.findall(pattern, text_upper, re.IGNORECASE)
         for match in matches:
             try:
-                # Clean the number
                 cleaned = match.replace(',', '').replace(' ', '').strip()
                 value = float(cleaned)
-                # Only add reasonable amounts (between 1 and 1,000,000)
                 if 1 <= value <= 1000000:
-                    amounts.append(value)
+                    amount_contexts.append((value, score))
+                    print(f"Found priority amount: {value} (score: {score})")
             except:
                 pass
     
-    # Return unique amounts, sorted by most likely (prefer larger amounts for bills)
+    # If we found high-priority amounts, return the highest scored one
+    if amount_contexts:
+        amount_contexts.sort(key=lambda x: (x[1], x[0]), reverse=True)
+        return [amt[0] for amt in amount_contexts[:3]]  # Top 3 candidates
+    
+    # Medium priority - currency prefixed amounts
+    medium_patterns = [
+        (r'(?:₹|RS\.?|INR)\s*(\d{1,3}(?:[,\s]\d{3})*(?:\.\d{1,2})?)', 50),
+        (r'(?:₹|RS\.?|INR)\s*(\d+(?:\.\d{1,2})?)', 50),
+    ]
+    
+    for pattern, score in medium_patterns:
+        matches = re.findall(pattern, text_upper, re.IGNORECASE)
+        for match in matches:
+            try:
+                cleaned = match.replace(',', '').replace(' ', '').strip()
+                value = float(cleaned)
+                if 10 <= value <= 1000000:  # Minimum 10 for currency-prefixed
+                    amount_contexts.append((value, score))
+                    print(f"Found currency-prefixed amount: {value} (score: {score})")
+            except:
+                pass
+    
+    # If we found medium-priority amounts
+    if amount_contexts:
+        amount_contexts.sort(key=lambda x: (x[1], x[0]), reverse=True)
+        return [amt[0] for amt in amount_contexts[:3]]
+    
+    # Low priority - plain numbers with decimal points
+    low_patterns = [
+        r'(\d{1,3}(?:,\d{3})+\.\d{2})',  # 1,234.56
+        r'(\d{3,}\.\d{2})',  # 123.56 (at least 3 digits)
+    ]
+    
+    for pattern in low_patterns:
+        matches = re.findall(pattern, text_upper)
+        for match in matches:
+            try:
+                cleaned = match.replace(',', '').replace(' ', '').strip()
+                value = float(cleaned)
+                if 50 <= value <= 1000000:  # Minimum 50 for plain numbers
+                    amounts.append(value)
+                    print(f"Found plain number: {value}")
+            except:
+                pass
+    
+    # Return unique amounts, sorted descending (largest first)
     unique_amounts = list(set(amounts))
     unique_amounts.sort(reverse=True)
-    return unique_amounts
+    return unique_amounts[:5]  # Top 5 candidates
 
-# OCR using EasyOCR
+# OCR using EasyOCR with image preprocessing
 def try_ocr(filepath):
-    """Extract text from image using EasyOCR"""
+    """Extract text from image using EasyOCR with preprocessing"""
     try:
         reader = get_ocr_reader()
         if reader is None:
@@ -87,12 +142,50 @@ def try_ocr(filepath):
             return ""
         
         print(f"Processing image: {filepath}")
-        # Read the image with EasyOCR
-        results = reader.readtext(filepath, detail=0)  # detail=0 returns only text
         
-        # Join all detected text
+        # Try to preprocess image for better OCR
+        try:
+            import cv2
+            import numpy as np
+            
+            # Read image
+            img = cv2.imread(filepath)
+            
+            # Convert to grayscale
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            
+            # Apply slight blur to reduce noise
+            blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+            
+            # Increase contrast using CLAHE
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            enhanced = clahe.apply(blurred)
+            
+            # Apply adaptive thresholding
+            thresh = cv2.adaptiveThreshold(
+                enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                cv2.THRESH_BINARY, 11, 2
+            )
+            
+            # Use the preprocessed image
+            results = reader.readtext(thresh, detail=0, paragraph=False)
+            print(f"OCR with preprocessing: {len(results)} text segments detected")
+            
+        except Exception as preprocess_error:
+            print(f"Preprocessing failed, using original image: {preprocess_error}")
+            # Fallback to original image
+            results = reader.readtext(filepath, detail=0, paragraph=False)
+        
+        # Join all detected text with spaces
         text = ' '.join(results)
-        print(f"Extracted text: {text[:200]}...")
+        print(f"Full extracted text ({len(text)} chars): {text}")
+        
+        # Also print line by line for debugging
+        if results:
+            print("\nDetected text lines:")
+            for i, line in enumerate(results[:20], 1):  # Show first 20 lines
+                print(f"  {i}. {line}")
+        
         return text
     except Exception as e:
         print(f"OCR Error: {e}")
@@ -132,15 +225,31 @@ def index():
 @app.route('/upload', methods=['POST'])
 def upload():
     try:
+        print("\n" + "="*50)
+        print("Upload request received")
+        print("="*50)
+        
         if 'receipt' not in request.files:
+            print("ERROR: No file part in request")
             return jsonify({"status":"error","message":"No file part"}), 400
+        
         file = request.files['receipt']
+        print(f"File received: {file.filename}")
+        
         if file.filename == '':
+            print("ERROR: No file selected")
             return jsonify({"status":"error","message":"No selected file"}), 400
+        
+        if not allowed_file(file.filename):
+            print(f"ERROR: Invalid file type: {file.filename}")
+            return jsonify({"status":"error","message":"Invalid file type. Allowed: JPG, PNG, GIF, PDF"}), 400
         
         filename = secure_filename(file.filename)
         save_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        
+        print(f"Saving to: {save_path}")
         file.save(save_path)
+        print(f"File saved successfully")
         
         print(f"\n{'='*50}")
         print(f"Processing receipt: {filename}")
@@ -152,9 +261,9 @@ def upload():
         
         # Extract amounts
         amounts = extract_amounts_from_text(text)
-        print(f"Detected amounts: {amounts}")
+        print(f"\nDetected {len(amounts)} potential amounts: {amounts}")
         
-        # Use the first (largest) amount if found
+        # Use the first (highest priority) amount if found
         extracted = amounts[0] if amounts else None
         print(f"Selected amount: {extracted}")
         
@@ -163,6 +272,7 @@ def upload():
             "date": datetime.date.today().isoformat(),
             "filename": filename,
             "extracted_amount": extracted,
+            "all_detected_amounts": amounts[:5],  # Store top 5 for reference
             "ocr_text": text[:500]  # store more text for debugging
         }
         
@@ -172,13 +282,14 @@ def upload():
         if extracted is None:
             data.append(entry)
             save_data(data)
+            print("No amount detected - returning manual entry request")
             return jsonify({
                 "status":"ok",
                 "message":"uploaded",
                 "need_manual_amount":True,
                 "entry":entry,
-                "debug_text": text[:200]  # Send some text for debugging
-            })
+                "debug_text": text[:300]  # Send more text for debugging
+            }), 200
         else:
             # run prediction on extracted amount
             entry['amount'] = extracted  # Set amount field
@@ -186,14 +297,24 @@ def upload():
             entry.update(pred)
             data.append(entry)
             save_data(data)
+            print(f"Amount detected: ₹{extracted} - returning success")
+            
+            # Prepare response with alternatives if available
+            alternatives = amounts[1:4] if len(amounts) > 1 else []
+            
             return jsonify({
                 "status":"ok",
                 "message":"uploaded",
                 "need_manual_amount":False,
                 "entry":entry,
-                "extracted_amount": extracted
-            })
+                "extracted_amount": extracted,
+                "alternative_amounts": alternatives,  # Show other detected amounts
+                "ocr_text_sample": text[:200]
+            }), 200
     except Exception as e:
+        print(f"\n{'='*50}")
+        print(f"ERROR in upload route:")
+        print(f"{'='*50}")
         traceback.print_exc()
         return jsonify({"status":"error","message":str(e)}), 500
 
@@ -310,4 +431,4 @@ if __name__ == '__main__':
     if not os.path.exists(DATA_FILE):
         with open(DATA_FILE,'w') as f:
             json.dump([], f)
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
