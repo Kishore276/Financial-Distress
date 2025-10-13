@@ -10,7 +10,15 @@ document.getElementById('uploadForm')?.addEventListener('submit', async function
   form.querySelector('button').disabled = true;
   
   try {
-    const res = await fetch('/upload', {method: 'POST', body: data});
+    const res = await fetch('/upload', {
+      method: 'POST', 
+      body: data
+    });
+    
+    if (!res.ok) {
+      throw new Error(`Server error: ${res.status} ${res.statusText}`);
+    }
+    
     const json = await res.json();
     const out = document.getElementById('uploadResult');
     
@@ -43,10 +51,33 @@ document.getElementById('uploadForm')?.addEventListener('submit', async function
       });
     } else {
       out.className = 'success';
+      
+      // Build alternatives HTML if available
+      let alternativesHtml = '';
+      if (json.alternative_amounts && json.alternative_amounts.length > 0) {
+        alternativesHtml = `
+          <div style="margin-top: 1rem; padding: 1rem; background: #fff3cd; border-radius: 8px; border-left: 4px solid #ffc107;">
+            <p><strong>⚠️ Amount incorrect?</strong></p>
+            <p style="font-size: 0.875rem; margin: 0.5rem 0;">Other amounts detected in receipt:</p>
+            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem;">
+              ${json.alternative_amounts.map(amt => 
+                `<button onclick="correctAmount(${amt})" style="padding: 0.5rem 1rem; background: white; border: 2px solid #ffc107; border-radius: 6px; cursor: pointer; font-weight: 600;">₹${amt}</button>`
+              ).join('')}
+            </div>
+            <p style="font-size: 0.875rem; margin-top: 0.5rem; color: var(--text-secondary);">
+              Click a button to use that amount instead, or use manual entry below.
+            </p>
+          </div>
+        `;
+      }
+      
       out.innerHTML = `
         <p><strong>✅ Upload Successful!</strong></p>
-        <p>Receipt processed and analyzed. Amount detected: ₹${json.extracted_amount || 'N/A'}</p>
-        <a href="/result"><button style="margin-top: 0.5rem;">View Detailed Results →</button></a>
+        <p>Receipt processed and analyzed. Amount detected: <strong style="font-size: 1.2rem; color: var(--primary-color);">₹${json.extracted_amount || 'N/A'}</strong></p>
+        ${alternativesHtml}
+        <div style="margin-top: 1rem; display: flex; gap: 0.5rem;">
+          <a href="/result"><button style="flex: 1;">View Detailed Results →</button></a>
+        </div>
       `;
       
       // Reset form after 2 seconds
@@ -55,11 +86,15 @@ document.getElementById('uploadForm')?.addEventListener('submit', async function
       }, 2000);
     }
   } catch (error) {
+    console.error('Upload error:', error);
     const out = document.getElementById('uploadResult');
     out.className = 'error';
     out.innerHTML = `
       <p><strong>❌ Upload Failed</strong></p>
       <p>Error: ${error.message}</p>
+      <p style="font-size: 0.875rem; color: var(--text-secondary);">
+        Make sure the Flask server is running at http://127.0.0.1:5000
+      </p>
     `;
   } finally {
     // Restore button
@@ -81,6 +116,27 @@ document.querySelectorAll('a[href^="#"]').forEach(anchor => {
     }
   });
 });
+
+// Function to correct amount with alternative
+window.correctAmount = async function(amount) {
+  if (!confirm(`Use ₹${amount} as the correct amount?`)) {
+    return;
+  }
+  
+  const fdata = new FormData();
+  fdata.append('amount', amount);
+  fdata.append('category', 'Misc');
+  fdata.append('date', new Date().toISOString().split('T')[0]);
+  
+  try {
+    const res = await fetch('/manual-entry', {method: 'POST', body: fdata});
+    if (res.ok || res.redirected) {
+      window.location = '/result';
+    }
+  } catch (error) {
+    alert('Failed to update amount: ' + error.message);
+  }
+};
 
 // Add file preview
 document.getElementById('receiptInput')?.addEventListener('change', function(e) {
