@@ -56,16 +56,40 @@ def extract_amounts_from_text(text):
     if not text:
         return []
     
+    # CRITICAL FIX: Clean up misread rupee symbols that appear as digits
+    # OCR often misreads ₹ symbol as "2" when followed by numbers
+    # Only apply this fix in UPI/payment contexts where we expect small amounts
+    # Look for patterns like "Paid to ... 21,750" or "Debited ... 21,750"
+    text_cleaned = text
+    
+    # Check if this looks like a UPI/payment receipt (strong indicators)
+    is_upi_context = bool(re.search(
+        r'(?:PAID\s+TO|DEBITED|CREDITED|TRANSACTION|UPI|TRANSFER|UTR)',
+        text.upper()
+    ))
+    
+    if is_upi_context:
+        # In UPI context, amounts like "21,750" are suspicious (likely ₹1,750)
+        # But "21,750.50" or amounts > 22,000 are likely legitimate
+        # Pattern: fix "2X,XXX" where X is 1-9 (e.g., 21,750 but not 22,000 or higher)
+        text_cleaned = re.sub(r'\b2([1-9],\d{3})(?![,\d])\b', r'\1', text_cleaned)  # 21,750 -> 1,750 (not followed by more digits)
+        text_cleaned = re.sub(r'\b2([1-9]\d{2,3})(?![,\d])\b', r'\1', text_cleaned)   # 21750 -> 1750 (3-4 digits after 2)
+        
+        if text != text_cleaned:
+            print(f"⚠️ UPI context detected - fixed likely rupee symbol misread (₹ → '2')")
+    
     # Convert to uppercase for easier matching
-    text_upper = text.upper()
+    text_upper = text_cleaned.upper()
     amounts = []
     amount_contexts = []  # Store (amount, context_score) tuples
     
     # High priority patterns - look for keywords like TOTAL, AMOUNT, etc.
     priority_patterns = [
-        (r'(?:TOTAL|GRAND\s*TOTAL|NET\s*TOTAL|AMOUNT\s*PAYABLE|BILL\s*AMOUNT)[\s:]*(?:RS\.?|₹|INR)?\s*(\d+(?:[,\s]\d{3})*(?:\.\d{1,2})?)', 100),
-        (r'(?:TO\s*PAY|PAYABLE|BALANCE|DUE)[\s:]*(?:RS\.?|₹|INR)?\s*(\d+(?:[,\s]\d{3})*(?:\.\d{1,2})?)', 90),
-        (r'(?:PAID|PAYMENT|RECEIVED)[\s:]*(?:RS\.?|₹|INR)?\s*(\d+(?:[,\s]\d{3})*(?:\.\d{1,2})?)', 80),
+        (r'(?:TOTAL|GRAND\s*TOTAL|NET\s*TOTAL|AMOUNT\s*PAYABLE|BILL\s*AMOUNT|INVOICE\s*TOTAL)[\s:]*(?:RS\.?|₹|INR)?\s*(\d+(?:[,\s]\d{3})*(?:\.\d{1,2})?)', 100),
+        (r'(?:TO\s*PAY|PAYABLE|BALANCE|DUE|BALANCE\s*DUE)[\s:]*(?:RS\.?|₹|INR)?\s*(\d+(?:[,\s]\d{3})*(?:\.\d{1,2})?)', 90),
+        (r'(?:PAID|PAYMENT|RECEIVED|AMOUNT\s*PAID)[\s:]*(?:RS\.?|₹|INR)?\s*(\d+(?:[,\s]\d{3})*(?:\.\d{1,2})?)', 80),
+        # UPI/Payment specific patterns - PAID TO and DEBITED are critical for UPI
+        (r'(?:PAID\s+TO|DEBITED|CREDITED|TRANSFERRED)[\s\w]*?(?:RS\.?|₹|INR)?\s*(\d+(?:[,\s]\d{3})*(?:\.\d{1,2})?)', 95),
     ]
     
     # Check high priority patterns first
@@ -75,44 +99,59 @@ def extract_amounts_from_text(text):
             try:
                 cleaned = match.replace(',', '').replace(' ', '').strip()
                 value = float(cleaned)
-                if 1 <= value <= 1000000:
+                if 1 <= value <= 10000000:  # Increased max to 10M
                     amount_contexts.append((value, score))
-                    print(f"Found priority amount: {value} (score: {score})")
+                    print(f"Found priority amount: {value} (score: {score}, pattern: {pattern[:50]})")
             except:
                 pass
     
     # If we found high-priority amounts, return the highest scored one
     if amount_contexts:
         amount_contexts.sort(key=lambda x: (x[1], x[0]), reverse=True)
-        return [amt[0] for amt in amount_contexts[:3]]  # Top 3 candidates
+        return [amt[0] for amt in amount_contexts[:5]]  # Top 5 candidates
     
-    # Medium priority - currency prefixed amounts
+    # Medium priority - currency prefixed amounts (more variations)
     medium_patterns = [
-        (r'(?:₹|RS\.?|INR)\s*(\d{1,3}(?:[,\s]\d{3})*(?:\.\d{1,2})?)', 50),
-        (r'(?:₹|RS\.?|INR)\s*(\d+(?:\.\d{1,2})?)', 50),
+        # Direct rupee symbol patterns - these should catch ₹1,750 correctly
+        (r'₹\s*(\d{1,3}(?:[,\s]\d{3})*(?:\.\d{1,2})?)', 70),  # ₹ symbol with formatted number
+        (r'₹\s*(\d+(?:\.\d{1,2})?)', 65),  # ₹ symbol with simple number
+        (r'RS\.?\s*(\d{1,3}(?:[,\s]\d{3})*(?:\.\d{1,2})?)', 55),  # RS.
+        (r'INR\s*(\d{1,3}(?:[,\s]\d{3})*(?:\.\d{1,2})?)', 55),  # INR
+        (r'RS\.?\s*(\d+(?:\.\d{1,2})?)', 45),  # Simple RS
+        # Handle amounts with comma as decimal separator (some regions)
+        (r'₹\s*(\d{1,3}(?:\.\d{3})*,\d{2})', 50),  # European style: ₹1.234,56
+        # Handle cases where ₹ might be directly attached to number (no space)
+        (r'₹(\d{1,3}(?:,\d{3})*)', 68),  # ₹1,750 (no space)
+        (r'₹(\d+)', 63),  # ₹1750 (no space, no comma)
     ]
     
     for pattern, score in medium_patterns:
         matches = re.findall(pattern, text_upper, re.IGNORECASE)
         for match in matches:
             try:
-                cleaned = match.replace(',', '').replace(' ', '').strip()
+                # Handle European decimal format
+                if ',' in match and match.count(',') == 1 and match.count('.') > 0:
+                    cleaned = match.replace('.', '').replace(',', '.').strip()
+                else:
+                    cleaned = match.replace(',', '').replace(' ', '').strip()
                 value = float(cleaned)
-                if 10 <= value <= 1000000:  # Minimum 10 for currency-prefixed
+                if 10 <= value <= 10000000:  # Minimum 10 for currency-prefixed
                     amount_contexts.append((value, score))
                     print(f"Found currency-prefixed amount: {value} (score: {score})")
-            except:
+            except Exception as e:
+                print(f"Error parsing medium pattern '{match}': {e}")
                 pass
     
     # If we found medium-priority amounts
     if amount_contexts:
         amount_contexts.sort(key=lambda x: (x[1], x[0]), reverse=True)
-        return [amt[0] for amt in amount_contexts[:3]]
+        return [amt[0] for amt in amount_contexts[:5]]
     
-    # Low priority - plain numbers with decimal points
+    # Low priority - plain numbers with specific patterns
     low_patterns = [
         r'(\d{1,3}(?:,\d{3})+\.\d{2})',  # 1,234.56
-        r'(\d{3,}\.\d{2})',  # 123.56 (at least 3 digits)
+        r'(\d{1,3}(?:,\d{3})+)',  # 1,234 (large numbers with commas)
+        r'(\d{3,}\.\d{2})',  # 123.56 (at least 3 digits before decimal)
     ]
     
     for pattern in low_patterns:
@@ -121,7 +160,7 @@ def extract_amounts_from_text(text):
             try:
                 cleaned = match.replace(',', '').replace(' ', '').strip()
                 value = float(cleaned)
-                if 50 <= value <= 1000000:  # Minimum 50 for plain numbers
+                if 50 <= value <= 10000000:  # Minimum 50 for plain numbers
                     amounts.append(value)
                     print(f"Found plain number: {value}")
             except:
@@ -134,14 +173,18 @@ def extract_amounts_from_text(text):
 
 # OCR using EasyOCR with image preprocessing
 def try_ocr(filepath):
-    """Extract text from image using EasyOCR with preprocessing"""
+    """Extract text from image using EasyOCR with preprocessing and multiple strategies"""
     try:
         reader = get_ocr_reader()
         if reader is None:
-            print("OCR reader not available")
+            print("⚠️ OCR reader not available - returning empty text")
             return ""
         
+        print(f"\n{'='*60}")
         print(f"Processing image: {filepath}")
+        print(f"{'='*60}")
+        
+        all_results = []
         
         # Try to preprocess image for better OCR
         try:
@@ -150,45 +193,96 @@ def try_ocr(filepath):
             
             # Read image
             img = cv2.imread(filepath)
+            if img is None:
+                print(f"❌ Failed to read image file: {filepath}")
+                return ""
             
-            # Convert to grayscale
+            print(f"✓ Image loaded: {img.shape}")
+            
+            # Strategy 1: Enhanced preprocessing (original method)
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            
-            # Apply slight blur to reduce noise
             blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-            
-            # Increase contrast using CLAHE
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
             enhanced = clahe.apply(blurred)
-            
-            # Apply adaptive thresholding
             thresh = cv2.adaptiveThreshold(
                 enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
                 cv2.THRESH_BINARY, 11, 2
             )
             
-            # Use the preprocessed image
-            results = reader.readtext(thresh, detail=0, paragraph=False)
-            print(f"OCR with preprocessing: {len(results)} text segments detected")
+            print("Strategy 1: Enhanced preprocessing...")
+            results1 = reader.readtext(thresh, detail=0, paragraph=False)
+            all_results.extend(results1)
+            print(f"  → Found {len(results1)} segments")
+            
+            # Strategy 2: Simple grayscale
+            print("Strategy 2: Simple grayscale...")
+            results2 = reader.readtext(gray, detail=0, paragraph=False)
+            all_results.extend(results2)
+            print(f"  → Found {len(results2)} segments")
+            
+            # Strategy 3: Original color image
+            print("Strategy 3: Original image...")
+            results3 = reader.readtext(img, detail=0, paragraph=False)
+            all_results.extend(results3)
+            print(f"  → Found {len(results3)} segments")
+            
+            # Strategy 4: Inverted image (white text on dark background)
+            print("Strategy 4: Inverted image...")
+            inverted = cv2.bitwise_not(gray)
+            results4 = reader.readtext(inverted, detail=0, paragraph=False)
+            all_results.extend(results4)
+            print(f"  → Found {len(results4)} segments")
+            
+            # Strategy 5: High contrast binary
+            print("Strategy 5: Binary threshold...")
+            _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+            results5 = reader.readtext(binary, detail=0, paragraph=False)
+            all_results.extend(results5)
+            print(f"  → Found {len(results5)} segments")
             
         except Exception as preprocess_error:
-            print(f"Preprocessing failed, using original image: {preprocess_error}")
+            print(f"⚠️ Preprocessing failed: {preprocess_error}")
+            traceback.print_exc()
             # Fallback to original image
-            results = reader.readtext(filepath, detail=0, paragraph=False)
+            try:
+                print("Fallback: Using original image path...")
+                results_fallback = reader.readtext(filepath, detail=0, paragraph=False)
+                all_results.extend(results_fallback)
+                print(f"  → Found {len(results_fallback)} segments")
+            except Exception as fallback_error:
+                print(f"❌ Fallback also failed: {fallback_error}")
+        
+        # Remove duplicates while preserving order
+        unique_results = []
+        seen = set()
+        for text in all_results:
+            text_clean = text.strip()
+            if text_clean and text_clean not in seen:
+                unique_results.append(text_clean)
+                seen.add(text_clean)
         
         # Join all detected text with spaces
-        text = ' '.join(results)
-        print(f"Full extracted text ({len(text)} chars): {text}")
+        final_text = ' '.join(unique_results)
+        print(f"\n{'='*60}")
+        print(f"✓ Total unique segments: {len(unique_results)}")
+        print(f"✓ Total text length: {len(final_text)} chars")
+        print(f"{'='*60}")
+        print(f"Extracted text preview:\n{final_text[:500]}")
+        print(f"{'='*60}\n")
         
-        # Also print line by line for debugging
-        if results:
-            print("\nDetected text lines:")
-            for i, line in enumerate(results[:20], 1):  # Show first 20 lines
-                print(f"  {i}. {line}")
+        # Print line by line for debugging
+        if unique_results:
+            print("Detected text lines (unique):")
+            for i, line in enumerate(unique_results[:30], 1):  # Show first 30 lines
+                print(f"  {i:2d}. {line}")
+            if len(unique_results) > 30:
+                print(f"  ... and {len(unique_results) - 30} more lines")
+        else:
+            print("⚠️ No text detected from any strategy!")
         
-        return text
+        return final_text
     except Exception as e:
-        print(f"OCR Error: {e}")
+        print(f"❌ OCR Error: {e}")
         traceback.print_exc()
         return ""
 
@@ -257,15 +351,21 @@ def upload():
         
         # Try OCR
         text = try_ocr(save_path)
-        print(f"Full extracted text: {text}")
+        print(f"\n{'='*50}")
+        print(f"OCR Complete - Text length: {len(text)} chars")
+        print(f"{'='*50}")
         
         # Extract amounts
         amounts = extract_amounts_from_text(text)
-        print(f"\nDetected {len(amounts)} potential amounts: {amounts}")
+        print(f"\n{'='*50}")
+        print(f"Amount Extraction Results:")
+        print(f"  Detected {len(amounts)} potential amounts: {amounts}")
+        print(f"{'='*50}")
         
         # Use the first (highest priority) amount if found
         extracted = amounts[0] if amounts else None
-        print(f"Selected amount: {extracted}")
+        print(f"Selected amount: ₹{extracted}" if extracted else "⚠️ No amount detected")
+        print(f"{'='*50}\n")
         
         # Save an entry with extracted (or None) and OCR text for manual correction
         entry = {

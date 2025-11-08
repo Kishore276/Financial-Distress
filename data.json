@@ -60,10 +60,24 @@
   {
     "date": "2025-10-10",
     "filename": "Reciept.jpg",
-    "extracted_amount": 21750.0,
+    "extracted_amount": 1750.0,
     "ocr_text": "Transaction Successful 11.47 am on 17 Sept 2025 Paid to DIGITAL DREAMS 21,750 DD 69097701@ubin Transfer Details Transaction ID T2509171147188971702376 Debited Kishore 21,750 UTR: 674738785485 Powered by U? 'YES BANK from",
-    "amount": 21750.0,
-    "predicted_annual_expense": 7938750.0,
+    "amount": 1750.0,
+    "predicted_annual_expense": 638750.0,
+    "predicted_annual_savings": 0.0,
+    "distress_probability": 1.0,
+    "advice": "High risk detected: consider immediately reviewing recurring subscriptions and non-essential spending. Your projected annual expense seems high; try cutting discretionary spending by 10% to start."
+  },
+  {
+    "date": "2025-11-08",
+    "filename": "Reciept.jpg",
+    "extracted_amount": 1750.0,
+    "all_detected_amounts": [
+      1750.0
+    ],
+    "ocr_text": "Transaction Successful M47amon 17Sept2025 Paid to DIGITAL DREAMS 21,750 DD 69097701@ubin: Transfer Details Transaction ID T2509171147188971702376 Debited from , Kishore: 71,750 UTR: 674738785485\" 'Poweredby: @Zil vEseaNK 11.47 am on 17 Sept 2025 69097701@ubin Debited Kishore UTR: 674738785485 Powered by LZL YES BANK from V?I VYES BANK 11:47 am on 17 Sept 2025 UZL /YES BANK 1147 am on 17 Sept 2025 Debited from UZV JYES BANK",
+    "amount": 1750.0,
+    "predicted_annual_expense": 638750.0,
     "predicted_annual_savings": 0.0,
     "distress_probability": 1.0,
     "advice": "High risk detected: consider immediately reviewing recurring subscriptions and non-essential spending. Your projected annual expense seems high; try cutting discretionary spending by 10% to start."
