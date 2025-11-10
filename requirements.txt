@@ -1,10 +1,15 @@
 flask
 flask-cors
+flask-sqlalchemy
+flask-login
+pymysql
 werkzeug
 numpy
 scikit-learn
+pandas
 pillow
 easyocr
 opencv-python-headless
 torch
 torchvision
+cryptography
